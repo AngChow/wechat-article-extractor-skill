@@ -19,8 +19,20 @@
 
 ## 安装
 
+### 方式一：在 Claude Code 中直接安装（推荐）
+
+打开 Claude Code，直接说：
+
+```
+帮我安装这个 skill https://github.com/AngChow/wechat-article-extractor-skill.git
+```
+
+Claude 会自动完成克隆、安装依赖和注册 Skill。
+
+### 方式二：手动安装
+
 ```bash
-git clone https://github.com/yourusername/wechat-article-extractor-skill.git
+git clone https://github.com/AngChow/wechat-article-extractor-skill.git
 cd wechat-article-extractor-skill
 npm install
 ```
