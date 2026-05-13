@@ -17,86 +17,73 @@ Extract metadata and content from WeChat Official Account (微信公众号) arti
 - Support multiple article types: post, video, image, voice, text, repost
 - Handle various error cases: deleted content, expired links, access limits
 
-## Usage
+## Mandatory Post-Processing Workflow
 
-### Basic Extraction from URL
+After a successful extraction, you MUST perform the following steps before responding to the user:
+
+### Step 1: Extract article data
 
 ```javascript
 const { extract } = require('./scripts/extract.js');
-
-const result = await extract('https://mp.weixin.qq.com/s?__biz=...');
-// Returns: { done: true, code: 0, data: {...} }
+const result = await extract(url);
+// If result.done === false, report the error and STOP.
 ```
 
-### Extraction from HTML
+### Step 2: Save fixed HTML file
+
+Convert `data-src` to `src` in the HTML content and save to the wechat_articles directory.
 
 ```javascript
-const html = await fetch(url).then(r => r.text());
-const result = await extract(html, { url: sourceUrl });
+const { convertToFixedHtml, convertToMarkdown } = require('./convert.js');
+const fs = require('fs');
+const path = require('path');
+
+const outputDir = path.join(process.env.HOME, 'workspace_claude', 'wechat_articles');
+// Ensure directory exists
+fs.mkdirSync(outputDir, { recursive: true });
+
+// Generate a safe filename from the article title and date
+const dateStr = result.data.msg_publish_time_str
+  ? result.data.msg_publish_time_str.replace(/[\/:]/g, '-').split(' ')[0]
+  : 'unknown-date';
+const safeName = (result.data.msg_title || 'untitled')
+  .replace(/[\/\\:*?"<>|“”‘’]/g, '_')
+  .substring(0, 80);
+const baseName = `${dateStr}_${safeName}`;
+
+// Save fixed HTML
+const htmlPath = path.join(outputDir, baseName + '.html');
+fs.writeFileSync(htmlPath, convertToFixedHtml(result.data), 'utf8');
 ```
 
-### Options
+### Step 3: Save Markdown file
 
 ```javascript
-const result = await extract(url, {
-  shouldReturnContent: true,      // Return HTML content (default: true)
-  shouldReturnRawMeta: false,     // Return raw metadata (default: false)
-  shouldFollowTransferLink: true, // Follow migrated account links (default: true)
-  shouldExtractMpLinks: false,    // Extract embedded mp.weixin links (default: false)
-  shouldExtractTags: false,       // Extract article tags (default: false)
-  shouldExtractRepostMeta: false  // Extract repost source info (default: false)
-});
+// Save Markdown
+const mdPath = path.join(outputDir, baseName + '.md');
+fs.writeFileSync(mdPath, convertToMarkdown(result.data), 'utf8');
 ```
 
-## Response Format
+### Step 4: Summarize and report
 
-### Success Response
+Output the article summary to the user as before (title, author, publish time, key points, etc.), and at the end append a file locations section:
 
-```javascript
-{
-  done: true,
-  code: 0,
-  data: {
-    // Account info
-    account_name: "公众号名称",
-    account_alias: "微信号",
-    account_avatar: "头像URL",
-    account_description: "功能介绍",
-    account_id: "原始ID",
-    account_biz: "biz参数",
-    account_biz_number: 1234567890,
-    account_qr_code: "二维码URL",
-
-    // Article info
-    msg_title: "文章标题",
-    msg_desc: "文章摘要",
-    msg_content: "HTML内容",
-    msg_cover: "封面图URL",
-    msg_author: "作者",
-    msg_type: "post", // post|video|image|voice|text|repost
-    msg_has_copyright: true,
-    msg_publish_time: Date,
-    msg_publish_time_str: "2024/01/15 10:30:00",
-
-    // Link params
-    msg_link: "文章链接",
-    msg_source_url: "阅读原文链接",
-    msg_sn: "sn参数",
-    msg_mid: 1234567890,
-    msg_idx: 1
-  }
-}
+```
+文件已保存至：
+- HTML: wechat_articles/2026-04-15_薪人薪事3月薪升级...html
+- Markdown: wechat_articles/2026-04-15_薪人薪事3月薪升级...md
 ```
 
-### Error Response
+Use relative paths from the workspace root (`~/workspace_claude/`).
 
-```javascript
-{
-  done: false,
-  code: 1001,
-  msg: "无法获取文章信息"
-}
-```
+## Important Rules
+
+- ALWAYS perform all post-processing steps (save HTML + save Markdown) after a successful extraction. Never skip them.
+- NEVER save files to /tmp or the Desktop. Always save to `~/workspace_claude/wechat_articles/`.
+- The HTML file must have `data-src` replaced with `src` so images display correctly in browsers.
+- The Markdown file must include a YAML frontmatter with title, author, date, source, and original_url.
+- If the extraction fails, report the error code and message. Do NOT attempt to save files.
+- If a file with the same name already exists, overwrite it without asking.
 
 ## Error Codes
 
@@ -125,19 +112,3 @@ const result = await extract(url, {
 | 2014 | 内容被投诉 | Content reported |
 | 2015 | 账号处于迁移流程中 | Account migrating |
 | 2016 | 冒名侵权 | Impersonation |
-
-## Dependencies
-
-Required npm packages:
-- `cheerio` - HTML parsing
-- `dayjs` - Date formatting
-- `request-promise` - HTTP requests
-- `qs` - Query string parsing
-- `lodash.unescape` - HTML entities
-
-## Notes
-
-- Handles various WeChat page structures and anti-scraping measures
-- Automatically detects article type from page content
-- Supports extracting from Sogou WeChat search results (`weixin.sogou.com`)
-- Some fields may be null depending on article type and page structure

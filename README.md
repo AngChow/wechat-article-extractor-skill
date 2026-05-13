@@ -3,7 +3,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-14+-green.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-一个 Claude Code Skill，用于提取微信公众号文章的元数据和内容。支持多种文章类型，包括图文、视频、图片集、语音和转载文章。当用户需要提供微信公众号文章链接（mp.weixin.qq.com）时，Claude 会自动触发此 Skill 来提取文章信息。
+一个 Claude Code Skill，用于提取微信公众号文章的元数据和内容，并自动保存为 HTML 和 Markdown 文件。支持多种文章类型，包括图文、视频、图片集、语音和转载文章。
 
 ## 功能特性
 
@@ -12,30 +12,12 @@
 - 获取公众号信息：名称、头像、微信号、功能介绍
 - 提取文章内容（HTML 格式）
 - 获取封面图片 URL
+- 自动将文章保存为修复后的 HTML（`data-src` → `src`，浏览器可直接查看）
+- 自动将文章转换为 Markdown（含 YAML frontmatter）
 - 支持多种文章类型：图文、视频、图片集、语音、纯文字、转载
 - 处理各种异常情况：内容删除、链接过期、访问限制、账号迁移等
-- 支持搜狗微信搜索结果的解析 (`weixin.sogou.com`)
-- 可选提取文章标签和内嵌链接
 
 ## 安装
-
-这是一个 Claude Code Skill，可以通过以下方式安装：
-
-### 通过 Claude Code 安装（推荐）
-
-在 Claude Code 中运行：
-
-```
-/skill install wechat-article-extractor
-```
-
-或指定目录安装：
-
-```
-/skill install /path/to/wechat-article-extractor-skill
-```
-
-### 手动克隆安装
 
 ```bash
 git clone https://github.com/yourusername/wechat-article-extractor-skill.git
@@ -52,20 +34,15 @@ npm install
 ```javascript
 const { extract } = require('./scripts/extract.js');
 
-async function main() {
-  const url = 'https://mp.weixin.qq.com/s?__biz=...&mid=...&idx=...&sn=...';
-  const result = await extract(url);
+const result = await extract('https://mp.weixin.qq.com/s?__biz=...&mid=...&idx=...&sn=...');
 
-  if (result.done) {
-    console.log('文章标题:', result.data.msg_title);
-    console.log('公众号:', result.data.account_name);
-    console.log('发布时间:', result.data.msg_publish_time_str);
-  } else {
-    console.error('提取失败:', result.msg);
-  }
+if (result.done) {
+  console.log('文章标题:', result.data.msg_title);
+  console.log('公众号:', result.data.account_name);
+  console.log('发布时间:', result.data.msg_publish_time_str);
+} else {
+  console.error('提取失败:', result.msg);
 }
-
-main();
 ```
 
 ### 从 HTML 内容提取
@@ -75,14 +52,8 @@ main();
 ```javascript
 const { extract } = require('./scripts/extract.js');
 
-async function main() {
-  const html = await fetch(url).then(r => r.text());
-  const result = await extract(html, { url: sourceUrl });
-
-  console.log(result);
-}
-
-main();
+const html = await fetch(url).then(r => r.text());
+const result = await extract(html, { url: sourceUrl });
 ```
 
 ### 高级选项
@@ -97,6 +68,57 @@ const result = await extract(url, {
   shouldExtractRepostMeta: false  // 提取转载来源信息（默认：false）
 });
 ```
+
+### 后处理：保存为 HTML 和 Markdown
+
+提取成功后，可使用 `convert.js` 模块将文章保存为文件：
+
+```javascript
+const { convertToFixedHtml, convertToMarkdown } = require('./convert.js');
+const fs = require('fs');
+const path = require('path');
+
+const outputDir = path.join(process.env.HOME, 'workspace_claude', 'wechat_articles');
+fs.mkdirSync(outputDir, { recursive: true });
+
+// 生成安全文件名（中文弯引号等特殊字符会被替换）
+const dateStr = result.data.msg_publish_time_str
+  ? result.data.msg_publish_time_str.replace(/[\/:]/g, '-').split(' ')[0]
+  : 'unknown-date';
+const safeName = (result.data.msg_title || 'untitled')
+  .replace(/[\/\\:*?"<>|""'']/g, '_')
+  .substring(0, 80);
+const baseName = `${dateStr}_${safeName}`;
+
+// 保存 HTML（data-src 已替换为 src，浏览器可直接打开查看图片）
+fs.writeFileSync(
+  path.join(outputDir, baseName + '.html'),
+  convertToFixedHtml(result.data),
+  'utf8'
+);
+
+// 保存 Markdown（含 YAML frontmatter）
+fs.writeFileSync(
+  path.join(outputDir, baseName + '.md'),
+  convertToMarkdown(result.data),
+  'utf8'
+);
+```
+
+#### convertToFixedHtml(data)
+
+将提取结果转换为完整的 HTML 文件。主要处理：
+- 将微信文章中的 `data-src` 属性替换为 `src`，使图片在浏览器中正常显示
+- 添加基本的 HTML 文档结构和响应式图片样式
+
+#### convertToMarkdown(data)
+
+将提取结果转换为 Markdown 文本。主要特性：
+- 自动生成 YAML frontmatter（title, author, date, source, original_url）
+- 递归解析微信文章的嵌套 `<section>` 结构
+- 支持 h2/h3/h4 标题、加粗、斜体、链接、列表、引用、代码块
+- 提取图片的 `data-src` 或 `src` 属性
+- 清理多余空行
 
 ## 响应格式
 
@@ -194,14 +216,15 @@ wechat-article-extractor-skill/
 ├── scripts/
 │   ├── extract.js    # 核心提取逻辑
 │   └── errors.js     # 错误代码定义
-├── SKILL.md          # Skill 定义文件（Claude Skill 格式，包含触发条件和描述）
+├── convert.js        # HTML 修复 + Markdown 转换模块
+├── SKILL.md          # Skill 定义文件（Claude Skill 格式，含触发条件和后处理流程）
 ├── package.json      # 项目配置
 └── README.md         # 本文件
 ```
 
 ## 依赖项
 
-- `cheerio` - 服务端 HTML 解析
+- `cheerio` - 服务端 HTML 解析（extract.js + convert.js）
 - `dayjs` - 日期格式化
 - `request-promise` - HTTP 请求
 - `qs` - 查询字符串解析
@@ -213,79 +236,7 @@ wechat-article-extractor-skill/
 2. **页面结构**: 微信页面结构可能会变化，如遇问题请检查是否为最新版本
 3. **Cookie**: 某些文章可能需要登录才能访问完整内容
 4. **反爬措施**: 请遵守微信的使用条款，合理使用本工具
-
-## 示例应用
-
-### 批量提取文章
-
-```javascript
-const { extract } = require('./scripts/extract.js');
-
-async function batchExtract(urls) {
-  const results = [];
-
-  for (const url of urls) {
-    try {
-      const result = await extract(url);
-      if (result.done) {
-        results.push({
-          title: result.data.msg_title,
-          author: result.data.account_name,
-          publishTime: result.data.msg_publish_time_str
-        });
-      }
-      // 添加延迟避免被限流
-      await new Promise(r => setTimeout(r, 1000));
-    } catch (err) {
-      console.error(`提取失败: ${url}`, err.message);
-    }
-  }
-
-  return results;
-}
-
-const urls = [
-  'https://mp.weixin.qq.com/s?__biz=...',
-  'https://mp.weixin.qq.com/s?__biz=...'
-];
-
-batchExtract(urls).then(console.log);
-```
-
-### 保存为 Markdown
-
-```javascript
-const { extract } = require('./scripts/extract.js');
-const fs = require('fs');
-
-async function saveAsMarkdown(url, filename) {
-  const result = await extract(url);
-
-  if (!result.done) {
-    console.error('提取失败:', result.msg);
-    return;
-  }
-
-  const { data } = result;
-  const markdown = `
-# ${data.msg_title}
-
-> 作者: ${data.msg_author || data.account_name}
-> 公众号: ${data.account_name}
-> 发布时间: ${data.msg_publish_time_str}
-
-${data.msg_content}
-
----
-原文链接: [${data.msg_link}](${data.msg_link})
-`;
-
-  fs.writeFileSync(filename, markdown);
-  console.log(`已保存: ${filename}`);
-}
-
-saveAsMarkdown('https://mp.weixin.qq.com/s?__biz=...', 'article.md');
-```
+5. **文件名安全化**: 标题中的特殊字符（包括 ASCII 和中文引号 `""''`）会被替换为 `_`，避免同标题文章因引号差异生成不同文件名
 
 ## 许可证
 
@@ -296,6 +247,15 @@ saveAsMarkdown('https://mp.weixin.qq.com/s?__biz=...', 'article.md');
 欢迎提交 Issue 和 Pull Request！
 
 ## 更新日志
+
+### v1.1.0
+- 新增 `convert.js` 模块，将一次性脚本重构为可复用函数
+  - `convertToFixedHtml()`: 生成修复后的 HTML（`data-src` → `src`）
+  - `convertToMarkdown()`: 将微信文章 HTML 转换为 Markdown（含 YAML frontmatter）
+- SKILL.md 新增后处理流程定义：提取成功后自动保存 HTML + Markdown
+- 修复文件名安全化正则，补充中文弯引号 `""''`，避免同标题生成不同文件名
+- convert.js Markdown 转换支持 h4、`<em>`/`<i>` 斜体、`<a>` 链接
+- frontmatter 中的双引号自动转义，字段增加空值兜底
 
 ### v1.0.0
 - 初始版本发布
